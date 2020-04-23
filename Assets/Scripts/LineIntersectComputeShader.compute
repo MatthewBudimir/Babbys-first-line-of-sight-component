@@ -1,0 +1,91 @@
+﻿// Each #kernel tells which function to compile; you can have many kernels
+#pragma kernel CalculateIntersection2D
+
+// Create a RenderTexture with enableRandomWrite flag and set it
+// with cs.SetTexture
+
+
+struct SegmentPair
+{
+	float2 A1; // Is where we output our collision
+	float2 A2; // is our I and J values
+	float2 B1; // is our mat[0][0] and mat[1][1] values (so we can check if we divided by zero)
+	float2 B2; // B2.x is our storage for distance when we output, B2.y records our min distance to segment edge
+	float id;
+	float theta;
+
+
+
+};
+
+//texture is not using float4
+RWStructuredBuffer<SegmentPair> Result;
+
+[numthreads(4,1,1)]
+
+//Prototype: calculates distance between points
+void CalculateIntersection2D(uint3 id : SV_DispatchThreadID)
+{
+    // TODO: insert actual code here!
+	//given 2 vector pairs, calculate where these segments intersect
+
+	//Generate gauss jordan matrix:
+	float mat[2][3];
+
+
+	mat[0][0] = Result[id.x].A2.x - Result[id.x].A1.x;
+	mat[0][1] = Result[id.x].B1.x - Result[id.x].B2.x;
+	mat[0][2] = Result[id.x].B1.x - Result[id.x].A1.x;
+
+	mat[1][0] = Result[id.x].A2.y - Result[id.x].A1.y;
+	mat[1][1] = Result[id.x].B1.y - Result[id.x].B2.y;
+	mat[1][2] = Result[id.x].B1.y - Result[id.x].A1.y;
+
+	//Solve for scaling multipliers (Lines defined as scale for vectors)
+
+	float v1, v2, v3; // These exist so that we can complete our row operations without corrupting our values half way through.
+	
+	//Step 1: R2 = R2*mat[0][0] - R1*mat[1][0]
+	v1 = (mat[1][0] * mat[0][0]) - (mat[0][0] * mat[1][0]); 
+	v2 = (mat[1][1] * mat[0][0]) - (mat[0][1] * mat[1][0]);
+	v3 = (mat[1][2] * mat[0][0]) - (mat[0][2] * mat[1][0]);
+
+	mat[1][0] = v1;
+	mat[1][1] = v2;
+	mat[1][2] = v3;
+
+	//Step 2: R1 = R1*mat[1][1] - R2*mat[0][1]
+	Result[id.x].B1.y = mat[1][1];
+	v1 = (mat[0][0] * mat[1][1]) - (mat[1][0] * mat[0][1]);
+	v2 = (mat[0][1] * mat[1][1]) - (mat[1][1] * mat[0][1]);
+	v3 = (mat[0][2] * mat[1][1]) - (mat[1][2] * mat[0][1]);
+
+	mat[0][0] = v1;
+	mat[0][1] = v2;
+	mat[0][2] = v3;
+
+	//Step 3: Solve for I and J (vector coefficients)
+	float i = mat[0][2] / mat[0][0];
+	float j = mat[1][2] / mat[1][1];
+
+	//Calculate collision point by throwing coefficients back in.
+	float2 collision = Result[id.x].A1 + (i*(Result[id.x].A2 - Result[id.x].A1));
+
+    //calculate distance (important since closest collision will be the one that is chosen)
+	float horDist = Result[id.x].A1.x - collision.x;
+	float vertDist = Result[id.x].A1.y - collision.y;
+	float distSqr = (vertDist * vertDist) + (horDist * horDist);
+
+	//Manhattan distances for detecting how close we came to hitting a corner.
+	float distToStart = abs(collision.x - Result[id.x].B1.x) + abs(collision.y - Result[id.x].B1.y);
+	float distToEnd = abs(collision.x - Result[id.x].B2.x) + abs(collision.y - Result[id.x].B2.y);
+
+	Result[id.x].A1 = collision;
+	Result[id.x].A2.x = i;
+	Result[id.x].A2.y = j;
+	Result[id.x].B1.x = mat[0][0];
+	Result[id.x].B1.y = mat[1][1];
+	Result[id.x].B2.x = distSqr;
+	Result[id.x].B2.y = min(distToStart,distToEnd);
+
+}
