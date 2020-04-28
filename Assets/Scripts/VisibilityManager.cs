@@ -27,8 +27,10 @@ public class VisibilityManager : MonoBehaviour
     public Transform player;
     private List<RaySegmentPair> collisions; // List of collisions we use to figure out visibility polygon.
     //Compute shader for calculating intersections
+    public bool useHashing = false;
     public ComputeShader intersectCompute;
     public float cornerThreshold = 0.05f;
+    public bool usingMesh = false;
     public MeshFilter meshFilter;
 
     class Point
@@ -297,25 +299,41 @@ public class VisibilityManager : MonoBehaviour
         //At this point we know the starting angle of our first vision arc:
         VA.startingAngle = points[0].theta;
 
-        foreach (Segment seg in segments) //O(n^2) complexity but is mitigated by doing comparison on GPU.
+        if(useHashing)
         {
-            activeSegments.Add(seg.id, seg);
+            List<Segment> startingSegments = segments.FindAll(x => angleInRange(x.A.theta, x.B.theta, points[0].theta) == 0);
+            foreach (Segment seg in startingSegments) //instead of starting segments
+            {
+                activeSegments.Add(seg.id, seg);
+            }
         }
+        else
+        {
+            foreach (Segment seg in segments) //O(n^2) complexity but is mitigated by doing comparison on GPU.
+            {
+                activeSegments.Add(seg.id, seg);
+            }
+        }
+        
 
         //Iterate through points.
         for (int i = 0; i < points.Count; i++)
         {
             
             bool segmentProcessed = false;
-            if (activeSegments.ContainsKey(points[i].segmentId))
+            if(useHashing)
             {
-                //Then we need to remove this segment at the end.
-                segmentProcessed = true;
+                if (activeSegments.ContainsKey(points[i].segmentId))
+                {
+                    //Then we need to remove this segment at the end.
+                    segmentProcessed = true;
+                }
+                else
+                {
+                    activeSegments.Add(points[i].segmentId, segments[points[i].segmentId]);
+                }
             }
-            else
-            {
-                //activeSegments.Add(points[i].segmentId, segments[points[i].segmentId]);
-            }
+            
 
             //Compare this ray to every active segment
             //Create segment pairs:
@@ -623,9 +641,9 @@ public class VisibilityManager : MonoBehaviour
             }
 
             //Remove segment if this is the second time we've encountered this segment.
-            if (segmentProcessed)
+            if (useHashing && segmentProcessed)
             {
-                //activeSegments.Remove(points[i].segmentId);
+                activeSegments.Remove(points[i].segmentId);
             }
         }
         //Final Stitch up
@@ -634,6 +652,47 @@ public class VisibilityManager : MonoBehaviour
         VA.point2 = finalArc.point2;
         newVisionArcs.Add(VA);
         return newVisionArcs;
+    }
+
+    void UpdateMesh()
+    {
+        Vector3[] vertices = new Vector3[(visionArcs.Count*2)+1]; //2 vertices per vision arc + 1 for centre
+        int[] triangles = new int[visionArcs.Count*3];
+        Vector2[] uv = new Vector2[vertices.Length];
+        //Fill in dummy values for Uvs
+        for(int i = 0; i<uv.Length;i++)
+        {
+            uv[i] = Vector2.zero;
+        }
+
+        vertices[0] = player.position;
+        int j = 1;
+        for(int i = 0; i<visionArcs.Count;i++)
+        {
+            vertices[j] = visionArcs[i].point1;
+            j++;
+            vertices[j] = visionArcs[i].point2;
+            j++;
+        }
+        j = 1;
+        for(int i = visionArcs.Count * 3-1;i >=0 ;i--)
+        {
+            //the first number in every triangle should be 0, overwrite previous value if this is the case.
+            if(i%3 == 0)
+            {
+                triangles[i] = 0;
+            }
+            else
+            {
+                triangles[i] = j;
+                j++;
+            }
+        }
+        meshFilter.mesh.Clear();
+        meshFilter.mesh.vertices = vertices;
+        meshFilter.mesh.triangles = triangles;
+        meshFilter.mesh.uv = uv;
+        meshFilter.mesh.RecalculateNormals();
     }
 
     void Start()
@@ -736,17 +795,14 @@ public class VisibilityManager : MonoBehaviour
                     }
                     player.hasChanged = false;
                     calculatingArcs = false;
+                    if(usingMesh)
+                    {
+                        UpdateMesh();
+                    }
 
                     
                 }
-                //else if(arcCalculation.IsFaulted || arcCalculation.IsCanceled)
-                //{
-                //    Debug.Log("OH NO");
-                //}
-                //else
-                //{
-                //    Debug.Log("Calculating...");
-                //}
+
             }
             else
             {
