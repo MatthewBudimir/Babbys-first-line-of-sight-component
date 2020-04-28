@@ -1,4 +1,5 @@
-﻿
+﻿using System.Threading.Tasks;
+using System.Threading;
 using System.Collections;
 using System.Collections.Generic;
 using UnityEngine;
@@ -12,20 +13,22 @@ using UnityEngine;
  * 
      */
 
-public class VisibilityManagerV3 : MonoBehaviour
+public class HashedVisibilityManager : MonoBehaviour
 {
     Transform[] wallTransforms;
+    int calculationCounter;
     List<Segment> segments;
     List<Segment> outlines;
     List<Point> points;
     List<VisionArc> visionArcs;
+    Task arcCalculation;
+    bool calculatingArcs;
     int lastHitId;
+    public bool debugRenderEnabled = true;
     public Transform player;
     private List<RaySegmentPair> collisions; // List of collisions we use to figure out visibility polygon.
     //Compute shader for calculating intersections
     public ComputeShader intersectCompute;
-    //Result for shader (Temporary)
-    public RenderTexture result;
     public float cornerThreshold = 0.05f;
     public MeshFilter meshFilter;
 
@@ -270,14 +273,15 @@ public class VisibilityManagerV3 : MonoBehaviour
     }
 
 
-    void UpdateVisionArcs()
+    List<VisionArc> UpdateVisionArcs()
     {
+        calculationCounter++;
         //########################################### VERSION 1 ####################################
         lastHitId = -1;
         //Every frame the active segments and collisions are unique.
         Dictionary<int, Segment> activeSegments = new Dictionary<int, Segment>();
         collisions = new List<RaySegmentPair>();
-        visionArcs = new List<VisionArc>();
+        List<VisionArc> newVisionArcs = new List<VisionArc>();
         VisionArc VA = new VisionArc();
         VisionArc finalArc = new VisionArc();
         int finalArcId = -1;
@@ -294,24 +298,39 @@ public class VisibilityManagerV3 : MonoBehaviour
         //At this point we know the starting angle of our first vision arc:
         VA.startingAngle = points[0].theta;
 
-        foreach (Segment seg in segments) //O(n^2) complexity but is mitigated by doing comparison on GPU.
+        List<Segment> startingSegments = segments.FindAll(x => angleInRange(x.A.theta, x.B.theta, points[0].theta)==0);
+        int debugMaxSegmentsUsed = 0;
+        int doubleEncounterCount = 0;
+        int removeLater = -1;
+        Debug.Log(string.Format("Starting Segment Count: {0}", startingSegments.Count));
+        List<Segment> segmentAdditionMap = new List<Segment>();
+
+        foreach (Segment seg in startingSegments) //instead of starting segments
         {
+            segmentAdditionMap.Add(seg);
             activeSegments.Add(seg.id, seg);
         }
 
         //Iterate through points.
+        
         for (int i = 0; i < points.Count; i++)
         {
-            Debug.Log(points[i].theta / Mathf.PI);
             bool segmentProcessed = false;
             if (activeSegments.ContainsKey(points[i].segmentId))
             {
                 //Then we need to remove this segment at the end.
                 segmentProcessed = true;
+                doubleEncounterCount++;
             }
             else
             {
-                //activeSegments.Add(points[i].segmentId, segments[points[i].segmentId]);
+                activeSegments.Add(points[i].segmentId, segments[points[i].segmentId]);
+                segmentAdditionMap.Add(segments[points[i].segmentId]);
+                if(activeSegments.Count > debugMaxSegmentsUsed)
+                {
+                    debugMaxSegmentsUsed = activeSegments.Count;
+                }
+                
             }
 
             //Compare this ray to every active segment
@@ -373,7 +392,7 @@ public class VisibilityManagerV3 : MonoBehaviour
                             VA.point2 = new Vector3(segmentPairs[hitIndeces[1]].A1.x, 0, segmentPairs[hitIndeces[1]].A1.y);
 
                             //Commit arc to memory.
-                            visionArcs.Add(VA);
+                            newVisionArcs.Add(VA);
 
                             //Establish next arc start:
                             VA.startingAngle = segmentPairs[hitIndeces[0]].theta;
@@ -399,7 +418,7 @@ public class VisibilityManagerV3 : MonoBehaviour
                             VA.endingDistSqr = segmentPairs[hitIndeces[0]].B2.x;
                             VA.point2 = new Vector3(segmentPairs[hitIndeces[0]].A1.x, 0, segmentPairs[hitIndeces[0]].A1.y);
                             //Commit arc to memory.
-                            visionArcs.Add(VA);
+                            newVisionArcs.Add(VA);
                             //Establish next arc start:
                             VA.startingAngle = segmentPairs[hitIndeces[1]].theta;
                             VA.startingDistSqr = segmentPairs[hitIndeces[1]].B2.x;
@@ -424,7 +443,7 @@ public class VisibilityManagerV3 : MonoBehaviour
                             VA.endingDistSqr = segmentPairs[hitIndeces[0]].B2.x;
                             VA.point2 = new Vector3(segmentPairs[hitIndeces[0]].A1.x, 0, segmentPairs[hitIndeces[0]].A1.y);
                             //Commit arc to memory.
-                            visionArcs.Add(VA);
+                            newVisionArcs.Add(VA);
                             //Establish next arc start:
                             VA.startingAngle = segmentPairs[hitIndeces[1]].theta;
                             VA.startingDistSqr = segmentPairs[hitIndeces[1]].B2.x;
@@ -452,7 +471,7 @@ public class VisibilityManagerV3 : MonoBehaviour
                             VA.endingDistSqr = segmentPairs[hitIndeces[0]].B2.x;
                             VA.point2 = new Vector3(segmentPairs[hitIndeces[0]].A1.x, 0, segmentPairs[hitIndeces[0]].A1.y);
                             //Commit arc to memory.
-                            visionArcs.Add(VA);
+                            newVisionArcs.Add(VA);
                             //Establish next arc start:
                             VA.startingAngle = segmentPairs[hitIndeces[1]].theta;
                             VA.startingDistSqr = segmentPairs[hitIndeces[1]].B2.x;
@@ -476,7 +495,7 @@ public class VisibilityManagerV3 : MonoBehaviour
                             VA.endingDistSqr = segmentPairs[hitIndeces[1]].B2.x;
                             VA.point2 = new Vector3(segmentPairs[hitIndeces[1]].A1.x, 0, segmentPairs[hitIndeces[1]].A1.y);
                             //Commit arc to memory.
-                            visionArcs.Add(VA);
+                            newVisionArcs.Add(VA);
                             //Establish next arc start:
                             VA.startingAngle = segmentPairs[hitIndeces[0]].theta;
                             VA.startingDistSqr = segmentPairs[hitIndeces[0]].B2.x;
@@ -508,7 +527,7 @@ public class VisibilityManagerV3 : MonoBehaviour
                             VA.endingDistSqr = segmentPairs[hitIndeces[0]].B2.x;
                             VA.point2 = new Vector3(segmentPairs[hitIndeces[0]].A1.x, 0, segmentPairs[hitIndeces[0]].A1.y);
                             //Commit arc to memory.
-                            visionArcs.Add(VA);
+                            newVisionArcs.Add(VA);
                             //Establish next arc start:
                             VA.startingAngle = segmentPairs[hitIndeces[0]].theta;
                             VA.startingDistSqr = segmentPairs[hitIndeces[0]].B2.x;
@@ -532,7 +551,7 @@ public class VisibilityManagerV3 : MonoBehaviour
                             VA.endingDistSqr = segmentPairs[hitIndeces[0]].B2.x;
                             VA.point2 = new Vector3(segmentPairs[hitIndeces[0]].A1.x, 0, segmentPairs[hitIndeces[0]].A1.y);
                             //Commit arc to memory.
-                            visionArcs.Add(VA);
+                            newVisionArcs.Add(VA);
                             //Establish next arc start:
                             VA.startingAngle = segmentPairs[hitIndeces[0]].theta;
                             VA.startingDistSqr = segmentPairs[hitIndeces[0]].B2.x;
@@ -557,7 +576,7 @@ public class VisibilityManagerV3 : MonoBehaviour
                         VA.endingDistSqr = segmentPairs[hitIndeces[0]].B2.x;
                         VA.point2 = new Vector3(segmentPairs[hitIndeces[0]].A1.x, 0, segmentPairs[hitIndeces[0]].A1.y);
                         //Commit arc to memory.
-                        visionArcs.Add(VA);
+                        newVisionArcs.Add(VA);
                         //Establish next arc start:
                         VA.startingAngle = segmentPairs[hitIndeces[0]].theta;
                         VA.startingDistSqr = segmentPairs[hitIndeces[0]].B2.x;
@@ -578,7 +597,7 @@ public class VisibilityManagerV3 : MonoBehaviour
                         VA.endingAngle = segmentPairs[hitIndeces[1]].theta;
                         VA.endingDistSqr = segmentPairs[hitIndeces[1]].B2.x;
                         VA.point2 = new Vector3(segmentPairs[hitIndeces[1]].A1.x, 0, segmentPairs[hitIndeces[1]].A1.y);
-                        visionArcs.Add(VA);
+                        newVisionArcs.Add(VA);
                         VA.startingAngle = segmentPairs[hitIndeces[0]].theta;
                         VA.startingDistSqr = segmentPairs[hitIndeces[0]].B2.x;
                         VA.point1 = new Vector3(segmentPairs[hitIndeces[0]].A1.x, 0, segmentPairs[hitIndeces[0]].A1.y);
@@ -590,7 +609,7 @@ public class VisibilityManagerV3 : MonoBehaviour
                         VA.endingAngle = segmentPairs[hitIndeces[0]].theta;
                         VA.endingDistSqr = segmentPairs[hitIndeces[0]].B2.x;
                         VA.point2 = new Vector3(segmentPairs[hitIndeces[0]].A1.x, 0, segmentPairs[hitIndeces[0]].A1.y);
-                        visionArcs.Add(VA);
+                        newVisionArcs.Add(VA);
                         VA.startingAngle = segmentPairs[hitIndeces[1]].theta;
                         VA.startingDistSqr = segmentPairs[hitIndeces[1]].B2.x;
                         VA.point1 = new Vector3(segmentPairs[hitIndeces[1]].A1.x, 0, segmentPairs[hitIndeces[1]].A1.y);
@@ -610,7 +629,7 @@ public class VisibilityManagerV3 : MonoBehaviour
                     VA.endingAngle = segmentPairs[hitIndeces[0]].theta;
                     VA.endingDistSqr = segmentPairs[hitIndeces[0]].B2.x;
                     VA.point2 = new Vector3(segmentPairs[hitIndeces[0]].A1.x, 0, segmentPairs[hitIndeces[0]].A1.y);
-                    visionArcs.Add(VA);
+                    newVisionArcs.Add(VA);
                     VA.startingAngle = segmentPairs[hitIndeces[0]].theta;
                     VA.startingDistSqr = segmentPairs[hitIndeces[0]].B2.x;
                     VA.point1 = new Vector3(segmentPairs[hitIndeces[0]].A1.x, 0, segmentPairs[hitIndeces[0]].A1.y);
@@ -620,20 +639,40 @@ public class VisibilityManagerV3 : MonoBehaviour
             }
 
             //Remove segment if this is the second time we've encountered this segment.
+            //activeSegments.Remove(removeLater);
             if (segmentProcessed)
             {
-                //activeSegments.Remove(points[i].segmentId);
+                //Never remove boundary segments
+                if (points[i].segmentId>3)
+                {
+                    //removeLater = points[i].segmentId;
+                    activeSegments.Remove(points[i].segmentId);
+                }
+
             }
+        }
+        Debug.Log(string.Format("Max simultaneous segments:{0}", debugMaxSegmentsUsed));
+        Debug.Log(string.Format("Double Encounter Count: {0}", doubleEncounterCount));
+        Debug.Log(string.Format("Total Number of segments: {0}", segments.Count));
+        for(int i = 0; i<segmentAdditionMap.Count;i++)
+        {
+            Vector3 xk = new Vector3(segmentAdditionMap[i].A.coor.x, 0, segmentAdditionMap[i].A.coor.y);
+            Vector3 cd = new Vector3(segmentAdditionMap[i].B.coor.x, 0, segmentAdditionMap[i].B.coor.y);
+            Debug.DrawLine(xk, cd, Color.Lerp(Color.red,Color.blue,(float)i/segmentAdditionMap.Count));
         }
         //Final Stitch up
         VA.endingAngle = finalArc.endingAngle;
         VA.endingDistSqr = finalArc.endingDistSqr;
         VA.point2 = finalArc.point2;
-        visionArcs.Add(VA);
+        newVisionArcs.Add(VA);
+        return newVisionArcs;
     }
 
     void Start()
     {
+        calculationCounter = 0;
+        calculatingArcs = false;
+        visionArcs = new List<VisionArc>();
         player.hasChanged = true;
         lastHitId = -1;
         segments = new List<Segment>();
@@ -650,7 +689,6 @@ public class VisibilityManagerV3 : MonoBehaviour
         Vector3[] segment;
         for (int i = 0; i < wallTransforms.Length; i++)
         {
-            //Debug.Log("PROCESSING");
             //For each element, define 4 segments that define the boundries of the cube:
             //Segment1
             segment = new Vector3[2];
@@ -692,7 +730,6 @@ public class VisibilityManagerV3 : MonoBehaviour
         //Skip your own transform:
         for (int i =1; i< wallTransforms.Length; i++)
         {
-            //Debug.Log("PROCESSING");
             //For each element, define 4 segments that define the boundries of the cube:
             //Segment1
             segment = new Vector3[2];
@@ -715,60 +752,84 @@ public class VisibilityManagerV3 : MonoBehaviour
     // Update is called once per frame
     void Update()
     {
-        
         //Recalculate Collisions if the player has moved.
+        List<VisionArc> tempBuffer;
         if (player.hasChanged)
         {
-            UpdateVisionArcs();
-            player.hasChanged = false;
-        }
-
-        
-
-
-        //Draw segments used for collision detection:
-        for (int i = 0; i < segments.Count; i++)
-        {
-            Debug.DrawLine(segments[i].A.toVector3(), segments[i].B.toVector3(), Color.green);
-        }
-        //Draw outlines of objects
-        for (int i = 0; i < outlines.Count; i++)
-        {
-            Debug.DrawLine(outlines[i].A.toVector3(), outlines[i].B.toVector3(), Color.white);
-        }
-        //Draw things
-        for (int i = 0; i < collisions.Count; i++)
-        {
-            if(i == 0 || i == collisions.Count -1)
+            if(calculatingArcs)
             {
-                debugDrawCollision(collisions[i].A1, player.position.y, Color.magenta);
+                if (arcCalculation.IsCompleted)
+                {
+                    tempBuffer = UpdateVisionArcs();
+                    visionArcs.Clear();
+                    foreach (VisionArc v in tempBuffer)
+                    {
+                        visionArcs.Add(v);
+                    }
+                    player.hasChanged = false;
+                    calculatingArcs = false;
+
+                    
+                }
+                //else if(arcCalculation.IsFaulted || arcCalculation.IsCanceled)
+                //{
+                //    Debug.Log("OH NO");
+                //}
+                //else
+                //{
+                //    Debug.Log("Calculating...");
+                //}
             }
             else
             {
-                debugDrawCollision(collisions[i].A1, player.position.y, Color.yellow);
+                
+                calculatingArcs = true;
+                arcCalculation = new Task(() => { tempBuffer = UpdateVisionArcs();
+                });
+                arcCalculation.Start();
             }
-            Debug.DrawLine(player.position, new Vector3(collisions[i].A1.x, player.position.y, collisions[i].A1.y), Color.Lerp(Color.red, Color.blue, (float)i / collisions.Count));
+            
         }
-        //Render vision arcs in use:
-        for (int i = 0; i < visionArcs.Count; i++)
+        //Debug.Log(string.Format("player has changed: {0} | Calculating: {1} | CalcCount: {2} | Vision arc count: {3}", player.hasChanged, calculatingArcs, calculationCounter, visionArcs.Count));
+
+
+
+        if(debugRenderEnabled)
         {
-            debugDrawVisionArc(visionArcs[i], player.position, new Color(1, 0.64f, 0));
-            debugDrawVisionArc(visionArcs[i], player.position, Color.grey);
-            //debugDrawVisionArc(visionArcs[i], player.position,Color.Lerp(Color.red,Color.blue,(float)i/visionArcs.Count));
-        }
-        //See if the point we hit with our mouse Raycast is in one of our vision arcs.
-        RaycastHit hit;
-        Ray ray = Camera.main.ScreenPointToRay(Input.mousePosition);
-        if (Physics.Raycast(ray, out hit))
-        {
-            Transform objectHit = hit.transform;
-            int arcHit = TestVisibility(hit.point);
-            if (arcHit != -1)
+
+            //Draw segments used for collision detection:
+            for (int i = 0; i < segments.Count; i++)
             {
-                debugDrawVisionArc(visionArcs[arcHit], player.position, Color.red);
+                Debug.DrawLine(segments[i].A.toVector3(), segments[i].B.toVector3(), Color.green);
             }
-            Debug.DrawLine(player.position, hit.point);
+            //Draw outlines of objects
+            for (int i = 0; i < outlines.Count; i++)
+            {
+                Debug.DrawLine(outlines[i].A.toVector3(), outlines[i].B.toVector3(), Color.white);
+            }
+
+            //Render vision arcs in use:
+            for (int i = 0; i < visionArcs.Count; i++)
+            {
+                debugDrawVisionArc(visionArcs[i], player.position, Color.grey);
+                //debugDrawVisionArc(visionArcs[i], player.position,Color.Lerp(Color.red,Color.blue,(float)i/visionArcs.Count));
+            }
+            debugDrawVisionArc(visionArcs[visionArcs.Count-1], player.position, Color.magenta);
+            //See if the point we hit with our mouse Raycast is in one of our vision arcs.
+            RaycastHit hit;
+            Ray ray = Camera.main.ScreenPointToRay(Input.mousePosition);
+            if (Physics.Raycast(ray, out hit))
+            {
+                Transform objectHit = hit.transform;
+                int arcHit = TestVisibility(hit.point);
+                if (arcHit != -1)
+                {
+                    debugDrawVisionArc(visionArcs[arcHit], player.position, Color.red);
+                }
+                Debug.DrawLine(player.position, hit.point);
+            }
         }
+
     }
     bool TestVisionArc(Vector3 point, VisionArc VA)
     {
@@ -815,16 +876,14 @@ public class VisibilityManagerV3 : MonoBehaviour
             //Use interior angle
             if(theta > arcEnd || theta < arcStart)
             {
-                Debug.Log(string.Format("{0}   {1}   {2}", arcStart, theta, arcEnd));
+                //Debug.Log(string.Format("{0}   {1}   {2}", arcStart, theta, arcEnd));
                 return PointInTriangle(p, P1, P2, Vector2.zero);
                 
             }
         }
         else if(arcStart < theta && arcEnd > theta)
         {
-            //float t = (theta - arcStart) / (arcEnd - arcStart);
-            //Debug.Log(string.Format("Angle:{0}, Ratio:{1}",t,startDist/endDist));
-            Debug.Log(string.Format("{0}   {1}   {2}", arcStart, theta, arcEnd));
+            //Debug.Log(string.Format("{0}   {1}   {2}", arcStart, theta, arcEnd));
             return PointInTriangle(p, P1, P2, Vector2.zero);
 
 
@@ -872,10 +931,14 @@ public class VisibilityManagerV3 : MonoBehaviour
         }
     }
 
-    int TestVisibility(Vector3 point)
+    public int TestVisibility(Vector3 point)
     {
         //TOOD: Put in safety check if we somehow don't find an arc that works
         //Find out which vision arc we should test:
+        if(visionArcs.Count == 0)
+        {
+            return -1;
+        }
         int index = visionArcs.Count / 2;
         int test = 0;
         float theta = Mathf.Atan2(point.z - player.position.z, point.x - player.position.x);
@@ -893,15 +956,7 @@ public class VisibilityManagerV3 : MonoBehaviour
         int beg = 0;
         int end = visionArcs.Count - 1;
 
-        Color[] colours =
-        {
-            Color.red,
-            Color.yellow,
-            Color.green,
-            Color.cyan,
-            Color.blue,
-            Color.magenta
-        };
+        
         int colCount = -1;
         while (beg <= end)
         {
@@ -909,11 +964,14 @@ public class VisibilityManagerV3 : MonoBehaviour
             index = (beg + end) / 2;
             float arcStart = visionArcs[index].startingAngle < 0 ? 2 * Mathf.PI + visionArcs[index].startingAngle : visionArcs[index].startingAngle;
             float arcEnd = visionArcs[index].endingAngle < 0 ? 2 * Mathf.PI + visionArcs[index].endingAngle : visionArcs[index].endingAngle;
-            debugDrawVisionArc(visionArcs[index], player.position, colours[(int)Mathf.Min(colCount, colours.Length - 1)]);
+            //debugDrawVisionArc(visionArcs[index], player.position, colours[(int)Mathf.Min(colCount, colours.Length - 1)]);
             test = angleInRange(arcStart,arcEnd,theta);
             if(test == 0)
             {
-                debugDrawVisionArc(visionArcs[index], player.position, Color.blue);
+                if(debugRenderEnabled)
+                {
+                    debugDrawVisionArc(visionArcs[index], player.position, Color.blue);
+                }
                 Vector2 A = new Vector2(player.transform.position.x, player.transform.position.z);
                 Vector2 B = new Vector2(visionArcs[index].point1.x, visionArcs[index].point1.z);
                 Vector2 C = new Vector2(visionArcs[index].point2.x, visionArcs[index].point2.z);

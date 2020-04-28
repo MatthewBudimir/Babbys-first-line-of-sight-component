@@ -23,6 +23,7 @@ public class VisibilityManager : MonoBehaviour
     Task arcCalculation;
     bool calculatingArcs;
     int lastHitId;
+    public bool debugRenderEnabled = true;
     public Transform player;
     private List<RaySegmentPair> collisions; // List of collisions we use to figure out visibility polygon.
     //Compute shader for calculating intersections
@@ -761,36 +762,40 @@ public class VisibilityManager : MonoBehaviour
 
 
 
-        //Draw segments used for collision detection:
-        for (int i = 0; i < segments.Count; i++)
+        if(debugRenderEnabled)
         {
-            Debug.DrawLine(segments[i].A.toVector3(), segments[i].B.toVector3(), Color.green);
-        }
-        //Draw outlines of objects
-        for (int i = 0; i < outlines.Count; i++)
-        {
-            Debug.DrawLine(outlines[i].A.toVector3(), outlines[i].B.toVector3(), Color.white);
-        }
-        
-        //Render vision arcs in use:
-        for (int i = 0; i < visionArcs.Count; i++)
-        {
-            debugDrawVisionArc(visionArcs[i], player.position, new Color(1, 0.64f, 0));
-            debugDrawVisionArc(visionArcs[i], player.position, Color.grey);
-            //debugDrawVisionArc(visionArcs[i], player.position,Color.Lerp(Color.red,Color.blue,(float)i/visionArcs.Count));
-        }
-        //See if the point we hit with our mouse Raycast is in one of our vision arcs.
-        RaycastHit hit;
-        Ray ray = Camera.main.ScreenPointToRay(Input.mousePosition);
-        if (Physics.Raycast(ray, out hit))
-        {
-            Transform objectHit = hit.transform;
-            int arcHit = TestVisibility(hit.point);
-            if (arcHit != -1)
+
+            //Draw segments used for collision detection:
+            for (int i = 0; i < segments.Count; i++)
             {
-                debugDrawVisionArc(visionArcs[arcHit], player.position, Color.red);
+                Debug.DrawLine(segments[i].A.toVector3(), segments[i].B.toVector3(), Color.green);
             }
-            Debug.DrawLine(player.position, hit.point);
+            //Draw outlines of objects
+            for (int i = 0; i < outlines.Count; i++)
+            {
+                Debug.DrawLine(outlines[i].A.toVector3(), outlines[i].B.toVector3(), Color.white);
+            }
+        
+            //Render vision arcs in use:
+            for (int i = 0; i < visionArcs.Count; i++)
+            {
+                debugDrawVisionArc(visionArcs[i], player.position, new Color(1, 0.64f, 0));
+                debugDrawVisionArc(visionArcs[i], player.position, Color.grey);
+                //debugDrawVisionArc(visionArcs[i], player.position,Color.Lerp(Color.red,Color.blue,(float)i/visionArcs.Count));
+            }
+            //See if the point we hit with our mouse Raycast is in one of our vision arcs.
+            RaycastHit hit;
+            Ray ray = Camera.main.ScreenPointToRay(Input.mousePosition);
+            if (Physics.Raycast(ray, out hit))
+            {
+                Transform objectHit = hit.transform;
+                int arcHit = TestVisibility(hit.point);
+                if (arcHit != -1)
+                {
+                    debugDrawVisionArc(visionArcs[arcHit], player.position, Color.red);
+                }
+                Debug.DrawLine(player.position, hit.point);
+            }
         }
 
     }
@@ -919,15 +924,7 @@ public class VisibilityManager : MonoBehaviour
         int beg = 0;
         int end = visionArcs.Count - 1;
 
-        Color[] colours =
-        {
-            Color.red,
-            Color.yellow,
-            Color.green,
-            Color.cyan,
-            Color.blue,
-            Color.magenta
-        };
+        
         int colCount = -1;
         while (beg <= end)
         {
@@ -935,11 +932,14 @@ public class VisibilityManager : MonoBehaviour
             index = (beg + end) / 2;
             float arcStart = visionArcs[index].startingAngle < 0 ? 2 * Mathf.PI + visionArcs[index].startingAngle : visionArcs[index].startingAngle;
             float arcEnd = visionArcs[index].endingAngle < 0 ? 2 * Mathf.PI + visionArcs[index].endingAngle : visionArcs[index].endingAngle;
-            debugDrawVisionArc(visionArcs[index], player.position, colours[(int)Mathf.Min(colCount, colours.Length - 1)]);
+            //debugDrawVisionArc(visionArcs[index], player.position, colours[(int)Mathf.Min(colCount, colours.Length - 1)]);
             test = angleInRange(arcStart,arcEnd,theta);
             if(test == 0)
             {
-                debugDrawVisionArc(visionArcs[index], player.position, Color.blue);
+                if(debugRenderEnabled)
+                {
+                    debugDrawVisionArc(visionArcs[index], player.position, Color.blue);
+                }
                 Vector2 A = new Vector2(player.transform.position.x, player.transform.position.z);
                 Vector2 B = new Vector2(visionArcs[index].point1.x, visionArcs[index].point1.z);
                 Vector2 C = new Vector2(visionArcs[index].point2.x, visionArcs[index].point2.z);
