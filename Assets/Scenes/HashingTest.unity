@@ -211,7 +211,7 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: 
   debugRenderEnabled: 1
-  player: {fileID: 177315934}
+  observer: {fileID: 177315934}
   useHashing: 0
   intersectCompute: {fileID: 7200000, guid: 214329f4827d2f140bb4df723e52886e, type: 3}
   cornerThreshold: 0.01
